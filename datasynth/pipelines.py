@@ -1,25 +1,18 @@
 import typer
 import time
-import glob
-from typing import Optional, Any
+from typing import Optional
 from datasynth.generators import *
 from datasynth.normalizers import *
 from typing import Any, List, ClassVar, Optional
 from datasynth.base import BaseChain
 from typing import ClassVar
 from datasynth.few_shot import generate_population, populate_few_shot
-import os
-from datasynth.generators import GeneratorChain
-from datasynth.normalizers import NormalizerChain
 
 
 class DatasetPipeline(BaseChain):
 
     k: int = 10
-    few_shot_file: str
     sample_size: int = 3
-    batch_save: bool = False
-    batch_size: int = 100
     dataset_name: Optional[str] = None
     manual_review: bool = False
     generator: ClassVar[GeneratorChain]
@@ -33,27 +26,6 @@ class DatasetPipeline(BaseChain):
     @property
     def output_keys(self) -> List[str]:
         return ["dataset"]
-
-    @classmethod
-    def from_template(
-        cls,
-        *args,
-        **kwargs,
-    ):
-        return super()._from_name(
-            *args,
-            generator_chain=GeneratorChain,
-            normalizer_chain=NormalizerChain,
-            class_suffix="DatasetPipeline",
-            base_cls=DatasetPipeline,
-            **kwargs,
-        )
-
-    def execute(
-        self,
-    ) -> dict[str, List[dict[str, Any | str]]]:
-
-        return self.run()
 
     def run(
         self, inputs: dict[str, str] | None = None
@@ -73,141 +45,51 @@ class DatasetPipeline(BaseChain):
 
         return self._call(inputs)
 
-    def save_batch(self, batch: list[dict[str, Any]], batch_index: int):
-        """Save a batch of outputs to a file, with each batch saved in a separate file."""
-
-        if self.dataset_name is None:
-            self.dataset_name = str(int(time.time()))
-
-        batch_name = f"{self.dataset_name}_batch_{batch_index}.json"
-        batch_dir = os.path.join(os.path.dirname(__file__), "datasets")
-        if not os.path.exists(batch_dir):
-            os.makedirs(batch_dir, exist_ok=True)
-
-        batch_path = os.path.join(batch_dir, batch_name)
-        batch_outputs: dict[str, dict[str, list[dict[str, Any | str]] | str]] = {
-            "dataset": {
-                "outputs": batch,
-                "generator_prompt": self.generator._template.template,
-                "normalizer_prompt": self.normalizer._template.template,
-            }
-        }
-        with open(batch_path, "w") as fd:
-            json.dump(batch_outputs, fd)
-
-    def save_full_dataset(
-        self, results: dict[str, dict[str, list[dict[str, Any | str]] | str]]
-    ) -> None:
-        """Save the complete dataset to a file."""
-        if self.dataset_name is None:
-            self.dataset_name = f"{str(int(time.time()))}.json"
-        else:
-            self.dataset_name = f"{self.dataset_name}.json"
-
-        dataset_dir = os.path.join(os.path.dirname(__file__), "datasets")
-
-        if not os.path.exists(dataset_dir):
-            os.makedirs(dataset_dir, exist_ok=True)
-
-        dataset_path = os.path.join(dataset_dir, self.dataset_name)
-
-        with open(dataset_path, "w") as fd:
-            json.dump(results, fd)
-
-    def load_from_checkpoint(self) -> tuple[list[dict[str, Any | str]], int]:
-
-        if self.dataset_name is None:
-            self.dataset_name = str(int(time.time()))
-
-        checkpoint_dir = os.path.join(os.path.dirname(__file__), "datasets")
-        pattern = os.path.join(checkpoint_dir, f"{self.dataset_name}_batch_*.json")
-        import ipdb; ipdb.set_trace()
-        batch_files = sorted(
-            glob.glob(pattern), key=lambda x: int(x.split("_")[-1].split(".")[0])
-        )
-
-        if not os.path.exists(os.path.join(checkpoint_dir, self.dataset_name)):
-            return [], 0
-
-        existing_outputs: list[dict[str, Any]] = []
-        for batch_file in batch_files:
-            with open(batch_file, "r") as fd:
-                batch_data: list[dict[str, Any]] = json.load(fd)
-                existing_outputs.extend(batch_data)
-
-        # If there are batch files, set the next batch index to one higher than the last found batch index.
-        if batch_files:
-            last_batch_index = int(
-                batch_files[-1].split("_")[-1].split(".")[0]
-            )  # Assumes naming: datasetName_batch_N.json
-            batch_index = last_batch_index + 1
-        else:
-            batch_index = 0
-
-        return existing_outputs, batch_index
-
     def _call(
         self,
         inputs: Optional[dict[str, str] | None] = None,
     ) -> dict[str, List[dict[str, Any | str]]]:
-
-        population = generate_population(few_shot_example_file=self.few_shot_file)
-
-        batch_outputs: list[dict[str, Any]] = []
-        outputs, batch_idx = self.load_from_checkpoint()
-
-        while len(outputs) < self.k:
+        generated: List[dict[str, Any | str]] = []
+        population = generate_population(self.datatype)
+        while len(generated) < self.k:
             few_shot = populate_few_shot(
                 population=population, sample_size=self.sample_size
             )
-
             inputs = inputs or {}
             inputs["few_shot"] = few_shot
+
             generated_content: dict[str, str] = self.generator.invoke(input=inputs)
-
-            for example in generated_content["generated"]:
-
-                try:
-
-                    normalizer_inputs: dict[str, Any] = {
-                        self.normalizer.input_keys[0]: example
-                    }
-                    normalized_output = self.normalizer.invoke(normalizer_inputs)
-                    output = {
+            if generated_content.get("generated") is not None:
+                print("generated content:", generated_content)
+                generated.extend(generated_content["generated"])
+            else:
+                print("warning: No content generated")
+                break
+        outputs = []
+        for example in generated[: self.k]:
+            try:
+                normalizer_inputs: dict[str, Any] = {
+                    self.normalizer.input_keys[0]: example.strip()
+                }
+                print("EXAMPLE INPUTS", example)
+                print("NORMALIZER INPUTS", normalizer_inputs)
+                outputs.append(
+                    {
                         "generated_input": example,
-                        "normalized_output": normalized_output,
+                        "normalized_output": self.normalizer.invoke(normalizer_inputs),
                     }
-                    outputs.append(output)
-
-                    if self.batch_save:
-                        # Append the current output to the batch_outputs list
-                        batch_outputs.append(output)
-                        if len(batch_outputs) >= self.batch_size:
-                            # Save the current batch to a file
-                            self.save_batch(batch_outputs, batch_idx)
-                            # Reset the batch_outputs list
-                            batch_outputs = []
-                            # Increment the batch index for the next batch
-                            batch_idx += 1
-
-                    if len(outputs) >= self.k:
-                        break
-
-                except Exception as e:
-                    print(e)
-                    continue
-
-        # save any reminaing items to last batch
-        if batch_outputs and self.batch_save:
-            self.save_batch(batch_outputs, batch_idx)
-
+                )
+            except:
+                continue
         results: dict[str, dict[str, list[dict[str, Any | str]] | str]] = {
             "dataset": {
                 "outputs": outputs,
-                "generator_prompt": self.generator._template.template,
-                "normalizer_prompt": self.normalizer._template.template,
+                "generator_prompt": self.generator.template.template,
+                "normalizer_prompt": self.normalizer.template.template,
             }
         }
+
+        assert len(results["dataset"]["outputs"]) == self.k
 
         if self.manual_review:
             for pair in results["dataset"]["outputs"]:
@@ -221,24 +103,40 @@ class DatasetPipeline(BaseChain):
                 else:
                     pair["manual_review"] = "rejected"
 
-        if not self.batch_save:
-            self.save_full_dataset(results)
+        if self.dataset_name is None:
+            self.dataset_name = f"{str(int(time.time()))}.json"
+        else:
+            self.dataset_name = f"{self.dataset_name}.json"
 
-        return results["dataset"]
+        dataset_dir: str = os.path.join(os.path.dirname(__file__), "datasets")
+        if not os.path.exists(dataset_dir):
+            os.makedirs(dataset_dir, exist_ok=True)
+
+        dataset_path: str = f"{dataset_dir}/{self.dataset_name}"
+        with open(dataset_path, "w") as fd:
+            json.dump(results, fd)
+
+        return results
+
+
+# TODO: look at overlap of generator and normalizer dirs
+template_dir = os.path.join(TEMPLATE_DIR, "generator")
+auto_class(
+    template_dir,
+    DatasetPipeline,
+    "DatasetPipeline",
+    generator_chain=GeneratorChain,
+    normalizer_chain=NormalizerChain,
+)
 
 
 def generate_dataset(
-    generator_file: str,
-    normalizer_file: str,
-    example_file: str,
-    k: int = 5,
-    dataset_name: str | None = None,
+    datatype: str,
+    k: int = 10,
+    dataset_name: str = None,
     temperature: float = 0.8,
     cache: bool = False,
     manual_review: bool = False,
-    model_name: str = "gpt-3.5-turbo",
-    batch_save: bool = False,
-    batch_size: int = 10,
 ):
     """Generate synthetic data and the normalized output
 
@@ -253,20 +151,19 @@ def generate_dataset(
         dict[str, dict[str, list[dict[str, Any | str]] | str]] : A dictionary of synthetically generated and normalized data
     """
 
-    chain = DatasetPipeline.from_template(
-        generator_template=generator_file,
-        normalizer_template=normalizer_file,
-        few_shot_file=example_file,
-        k=k,
+    auto_class(
+        template_dir,
+        DatasetPipeline,
+        "DatasetPipeline",
+        generator_chain=GeneratorChain,
+        normalizer_chain=NormalizerChain,
         temperature=temperature,
         cache=cache,
-        model_name=model_name,
-        batch_save=batch_save,
-        batch_size=batch_size,
-        dataset_name=dataset_name,
-        manual_review=manual_review,
     )
-
+    chain = DatasetPipeline.from_name(
+        datatype, k=k, dataset_name=dataset_name, manual_review=manual_review
+    )
+    
     return chain.run()
 
 

@@ -1,16 +1,18 @@
 import random
+from datasynth import EXAMPLE_DIR
 import os
 import json
 from typing import Union
-from datasynth.settings import SEPARATOR
+from settings import SEPARATOR
 
 separator = SEPARATOR
 
-def generate_population(few_shot_example_file: str) -> Union[list[str], list[dict[str, str]]]:
+def generate_population(datatype: str) -> Union[list[str], list[dict[str, str]]]:
     population: Union[list[str], list[dict[str, str]]] = []
+    example_file: str = os.path.join(EXAMPLE_DIR, f"{datatype}.json")
 
-    if os.path.exists(few_shot_example_file):
-        with open(few_shot_example_file, "r") as file:
+    if os.path.exists(example_file):
+        with open(example_file, "r") as file:
             data = json.load(file)
         # Check if the JSON structure is a dictionary containing a list (e.g., under a key like "examples")
         if isinstance(data, dict) and "examples" in data:

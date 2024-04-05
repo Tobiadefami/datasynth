@@ -1,20 +1,21 @@
+import os
 from typing import ClassVar
 from pydantic import Field, PrivateAttr
 from langchain.chains import LLMChain
+from langchain_openai import OpenAI, ChatOpenAI
 from langchain.prompts import PromptTemplate
 import typer
+from datasynth import TEMPLATE_DIR
 from pprint import pprint
-from datasynth.base import BaseChain
-from datasynth.few_shot import populate_few_shot, generate_population
-from datasynth.settings import SEPARATOR
-from datasynth.models import get_model
+from datasynth.base import BaseChain, auto_class
+from few_shot import populate_few_shot, generate_population
+from settings import SEPARATOR
 
 separator = SEPARATOR
 
 
 class GeneratorChain(BaseChain):
-    model_name: str = "gpt-3.5-turbo"
-    _template: PromptTemplate = PrivateAttr()
+    template: PromptTemplate = PrivateAttr()
     chain = Field(LLMChain, required=False)
     chain_type: ClassVar[str] = "generator"
     temperature: float = 0.0
@@ -23,9 +24,11 @@ class GeneratorChain(BaseChain):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._template = PromptTemplate(
+        self.template = PromptTemplate(
             input_variables=["few_shot"],
-            template=open(self.template_file).read(),
+            template=open(
+                os.path.join(TEMPLATE_DIR, "generator", f"{self.datatype}.template")
+            ).read(),
             validate_template=False,
             template_format="jinja2",
         )
@@ -34,37 +37,9 @@ class GeneratorChain(BaseChain):
                 f"temperature:{self.temperature} is greater than the maximum of 2-'temperature'"
             )
         self.chain = LLMChain(
-            prompt=self._template,
-            llm=get_model(
-                temperature=self.temperature,
-                cache=self.cache,
-                model_name=self.model_name,
-            ),
+            prompt=self.template,
+            llm=OpenAI(temperature=self.temperature, cache=self.cache),
             verbose=self.verbose,
-        )
-
-    def execute(
-        self,
-        few_shot_example_file: str,
-        sample_size: int = 3,
-    ):
-        population = generate_population(few_shot_example_file=few_shot_example_file)
-        few_shot = populate_few_shot(population=population, sample_size=sample_size)
-        result = self.chain.invoke({"few_shot": few_shot})
-        return result
-
-    @classmethod
-    def from_template(
-        cls,
-        *args,
-        **kwargs,
-    ):
-        return super().from_name(
-            *args,
-            class_suffix="Generator",
-            base_cls=GeneratorChain,
-            chain_type="generator",
-            **kwargs,
         )
 
     @property
@@ -74,30 +49,30 @@ class GeneratorChain(BaseChain):
     @property
     def output_keys(self) -> list[str]:
         return ["generated"]
-
+    
     def _call(self, inputs: dict[str, str]) -> dict[str, list[str]]:
+        print(f"inputs: {inputs}")
         generated_items = self.chain.invoke(input=inputs)["text"].split(separator)
+        print(f"generated_items: {generated_items}")
         filtered_items = [item for item in generated_items if item.strip()]
         return {"generated": filtered_items}
 
 
+template_dir = os.path.join(TEMPLATE_DIR, "generator")
+auto_class(template_dir, GeneratorChain, "Generator")
+
+
 def main(
-    generator_template: str,
-    few_shot_example_file: str,
+    datatype: str,
     sample_size: int = 3,
     temperature: float = 0.5,
     cache: bool = False,
     verbose: bool = True,
-    model_name: str = "gpt-3.5-turbo",
 ):
-    population = generate_population(few_shot_example_file=few_shot_example_file)
+    population = generate_population(datatype)
     few_shot = populate_few_shot(population=population, sample_size=sample_size)
-    chain = GeneratorChain.from_template(
-        generator_template,
-        temperature=temperature,
-        cache=cache,
-        verbose=verbose,
-        model_name=model_name,
+    chain = GeneratorChain.from_name(
+        datatype, temperature=temperature, cache=cache, verbose=verbose
     )
     pprint(chain.invoke(few_shot))
 

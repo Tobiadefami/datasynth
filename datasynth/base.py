@@ -1,15 +1,15 @@
 from typing import ClassVar
 from langchain.chains.base import Chain
-from typing import Any, Type
-from langchain.cache import SQLiteCache
+from typing import Any
+import os
 import langchain
+from langchain.cache import SQLiteCache
 
-langchain.llm_cache = SQLiteCache(database_path=".langchain.db")
+langchain.llm_cache = SQLiteCache()
+
 
 class BaseChain(Chain):
-    template_file: ClassVar[str]
-    generator_template: ClassVar[str]
-    normalizer_template: ClassVar[str]
+    datatype: ClassVar[str]
     chain_type: ClassVar[str]
     registry: ClassVar[dict[Any, str]] = {}
 
@@ -19,79 +19,58 @@ class BaseChain(Chain):
 
     @classmethod
     def register(cls, sub_cls: Any):
-        if hasattr(sub_cls, "template_file"):
-            cls.registry[(sub_cls.chain_type, sub_cls.template_file)] = sub_cls
+        if hasattr(sub_cls, "datatype"):
+            cls.registry[(sub_cls.chain_type, sub_cls.datatype)] = sub_cls
 
     @classmethod
-    def from_name(
-        cls,
-        template_file: str,
-        class_suffix: str,
-        base_cls: Type[Chain],
-        *args,
-        **kwargs
-    ) -> Chain:
+    def from_name(cls, datatype: str, *args, **kwargs) -> Chain:
+        return cls.registry[(cls.chain_type, datatype)](*args, **kwargs)
 
-        template_name = template_file.split("/")[-1].split(".")[0]
-       
+
+def template_names(path: str) -> list[str]:
+    """
+    obtain template names from a given directory
+
+    Args:
+        path (str): templates directory
+
+    Returns:
+        list[str]: a list of template names, eg: address, name, price
+    #"""
+    items: list[str] = os.listdir(path)
+
+    return [os.path.splitext(path)[0] for path in items]
+
+def auto_class(
+    path: str,
+    base_cls: type,
+    class_suffix: str,
+    generator_chain: Chain = None,
+    normalizer_chain: Chain = None,
+    **kwargs
+) -> None:
+    """
+    Dynamically creating new classes for the
+    generator, normalizer, and pipeline scripts
+
+    Args:
+        path (str): directory of files to obtain template names
+        base_cls (type): super class to inherit from
+        class_suffix (str): suffix to the generated class name
+    """
+    templates: list[str] = template_names(path)
+    for template in templates:
         generated_type: type = type(
-            template_name.capitalize() + class_suffix,
-            (base_cls,),
-            {"template_file": template_file},
+            template.capitalize() + class_suffix, (base_cls,), {"datatype": template}
         )
 
-        return generated_type(*args, **kwargs)
-
-    @classmethod
-    def _from_name(
-        cls,
-        generator_template: str,
-        normalizer_template: str,
-        generator_chain: Chain, 
-        normalizer_chain: Chain,
-        base_cls: Type[Chain],
-        class_suffix: str,
-        *args,
-        **kwargs
-    ) -> Chain:
-        """ Used to generate dynamic classes for base class == DatasetPipeline
-
-        Args:
-            generator_template (str): _description_
-            normalizer_template (str): _description_
-            generator_chain (Chain): _description_
-            normalizer_chain (Chain): _description_
-            base_cls (Type[Chain]): _description_
-            class_suffix (str): _description_
-
-        Returns:
-            Chain: _description_
-        """
-        template_name: str = generator_template.split("/")[-1].split(".")[0]
-
-        if cls.chain_type != "DatasetPipeline":
-            return
-        else:
-            generated_type: Type[Chain] = type(
-                template_name.capitalize() + class_suffix,
+        if class_suffix == "DatasetPipeline":
+            generated_type: type = type(
+                template.capitalize() + class_suffix,
                 (base_cls,),
                 {
-                    "generator_template": generator_template,
-                    "normalizer_template": normalizer_template,
-                    "generator": generator_chain.from_name(
-                        generator_template,
-                        *args,
-                        base_cls=generator_chain,
-                        class_suffix="Generator",
-                        **kwargs
-                    ),
-                    "normalizer": normalizer_chain.from_name(
-                        normalizer_template,
-                        *args,
-                        base_cls=normalizer_chain,
-                        class_suffix="Normalizer",
-                        **kwargs
-                    ),
+                    "datatype": template,
+                    "generator": generator_chain.from_name(template, **kwargs),
+                    "normalizer": normalizer_chain.from_name(template),
                 },
             )
-            return generated_type(*args, **kwargs)
