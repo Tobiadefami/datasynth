@@ -17,8 +17,8 @@ MODEL_MAP = {
     "mixtral:8x7b": Ollama,
     "mixtral:7b": Ollama,
     "mistral:7b": Ollama,
-    "HuggingFaceH4/zephyr-7b-beta": HuggingFaceHub,
-    "NousResearch/Hermes-2-Pro-Mistral-7B": HuggingFaceHub,
+    "command-r": Ollama,
+    "phi": Ollama
 }
 
 
@@ -30,7 +30,7 @@ def get_model(model_name: str, temperature: float, cache: bool, **kwargs) -> Ope
     if cache:
         set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
-    if model_name in ["llama2", "mixtral:8x7b", "mistral:7b"]:
+    if model_name in ["llama2", "mixtral:8x7b", "mistral:7b", "command-r", "phi"]:
         return model_function(model=model_name)
     
     if model_name in ["HuggingFaceH4/zephyr-7b-beta","NousResearch/Hermes-2-Pro-Mistral-7B"]:
